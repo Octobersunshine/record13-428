@@ -1,0 +1,12 @@
+{
+  "name": "File Hash API",
+  "version": "1.0.0",
+  "description": "A Node.js API for generating file content hashes",
+  "features": [
+    "MD5 hashing",
+    "SHA-1 hashing",
+    "SHA-256 hashing",
+    "SHA-512 hashing",
+    "Batch processing"
+  ]
+}

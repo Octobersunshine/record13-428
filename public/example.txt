@@ -1,0 +1,3 @@
+Hello, World!
+This is a sample text file for testing the file hash API.
+It contains some content that will be used to generate a unique hash.

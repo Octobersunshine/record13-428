@@ -1,0 +1,22 @@
+{
+  "name": "file-hash-api",
+  "version": "1.0.0",
+  "description": "Node.js API for reading local static files and generating unique content hash identifiers",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Octobersunshine/record13-428.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Octobersunshine/record13-428/issues"
+  },
+  "homepage": "https://github.com/Octobersunshine/record13-428#readme"
+}
