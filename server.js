@@ -164,12 +164,170 @@ function getMemoryStats() {
   };
 }
 
+function scanDirectory(dir, baseDir = dir, extensions = null) {
+  const results = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith('.')) continue;
+      results.push(...scanDirectory(fullPath, baseDir, extensions));
+    } else if (entry.isFile()) {
+      if (entry.name.startsWith('.')) continue;
+      if (extensions && extensions.length > 0) {
+        const ext = path.extname(entry.name).toLowerCase().slice(1);
+        if (!extensions.includes(ext)) continue;
+      }
+      results.push({
+        path: relativePath,
+        fullPath,
+        name: entry.name,
+      });
+    }
+  }
+
+  return results;
+}
+
+async function generateManifest(options = {}) {
+  const {
+    algorithm = DEFAULT_ALGORITHM,
+    extensions = null,
+    format = 'json',
+    prefix = '',
+  } = options;
+
+  const files = scanDirectory(PUBLIC_DIR, PUBLIC_DIR, extensions);
+  const startTime = Date.now();
+
+  const results = await limitConcurrency(files, 2, async (file) => {
+    try {
+      const hashResult = await generateHash(file.fullPath, algorithm);
+      const stats = fs.statSync(file.fullPath);
+      return {
+        path: prefix + file.path,
+        hash: hashResult.hash,
+        size: stats.size,
+        modified: stats.mtime.toISOString(),
+      };
+    } catch (err) {
+      return {
+        path: prefix + file.path,
+        error: err.message,
+      };
+    }
+  });
+
+  const duration = Date.now() - startTime;
+  const validResults = results.filter(r => !r.error);
+  const manifest = {
+    version: '1.0.0',
+    generatedAt: new Date().toISOString(),
+    algorithm,
+    duration: `${duration}ms`,
+    totalFiles: files.length,
+    processedFiles: validResults.length,
+    failedFiles: results.length - validResults.length,
+    files: validResults,
+  };
+
+  if (format === 'json') {
+    return { contentType: 'application/json', content: JSON.stringify(manifest, null, 2) };
+  } else if (format === 'text') {
+    const lines = [
+      `# Resource Manifest`,
+      `# Generated: ${manifest.generatedAt}`,
+      `# Algorithm: ${algorithm}`,
+      `# Duration: ${duration}ms`,
+      `# Files: ${validResults.length}/${files.length}`,
+      ``,
+      `# Path\tHash\tSize\tModified`,
+      ...validResults.map(f => `${f.path}\t${f.hash}\t${f.size}\t${f.modified}`),
+    ];
+    return { contentType: 'text/plain; charset=utf-8', content: lines.join('\n') };
+  } else if (format === 'html') {
+    const rows = validResults.map(f => `
+      <tr>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-family: monospace;">${f.path}</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-family: monospace; color: #667eea;">${f.hash}</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: right;">${(f.size / 1024).toFixed(2)} KB</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: #666;">${f.modified}</td>
+      </tr>
+    `).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resource Manifest</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f5f7fa; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
+    .header { padding: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .header h1 { margin: 0 0 8px 0; font-size: 24px; }
+    .header .stats { display: flex; gap: 24px; margin-top: 16px; flex-wrap: wrap; }
+    .header .stat { background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 4px; }
+    .header .stat .label { font-size: 12px; opacity: 0.8; }
+    .header .stat .value { font-size: 18px; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #f8f9fa; padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #e9ecef; }
+    tr:hover { background: #f8f9fa; }
+    .hash { font-family: 'Courier New', monospace; color: #667eea; }
+    .path { font-family: 'Courier New', monospace; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📦 Resource Manifest</h1>
+      <p style="margin: 0; opacity: 0.9;">Generated at ${manifest.generatedAt}</p>
+      <div class="stats">
+        <div class="stat"><div class="label">Algorithm</div><div class="value">${algorithm.toUpperCase()}</div></div>
+        <div class="stat"><div class="label">Files</div><div class="value">${validResults.length}</div></div>
+        <div class="stat"><div class="label">Duration</div><div class="value">${duration}ms</div></div>
+        <div class="stat"><div class="label">Total Size</div><div class="value">${(validResults.reduce((s, f) => s + f.size, 0) / 1024 / 1024).toFixed(2)} MB</div></div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th>Hash</th>
+          <th>Size</th>
+          <th>Modified</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>`;
+    return { contentType: 'text/html; charset=utf-8', content: html };
+  }
+
+  return { contentType: 'application/json', content: JSON.stringify(manifest, null, 2) };
+}
+
 function sendResponse(res, statusCode, data) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
   });
   res.end(JSON.stringify(data, null, 2));
+}
+
+function sendContent(res, statusCode, contentType, content) {
+  res.writeHead(statusCode, {
+    'Content-Type': contentType,
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(content);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -250,6 +408,26 @@ const server = http.createServer(async (req, res) => {
           .map((e) => e.name);
         sendResponse(res, 200, { success: true, files });
       });
+    } else if (pathname === '/api/manifest' && method === 'GET') {
+      const { algorithm, ext, format, prefix } = parsedUrl.query;
+
+      let extensions = null;
+      if (ext) {
+        extensions = Array.isArray(ext) ? ext : [ext];
+        extensions = extensions.map(e => e.toLowerCase().replace(/^\./, ''));
+      }
+
+      try {
+        const result = await generateManifest({
+          algorithm,
+          extensions,
+          format: format || 'json',
+          prefix: prefix || '',
+        });
+        sendContent(res, 200, result.contentType, result.content);
+      } catch (err) {
+        sendResponse(res, 500, { error: err.message });
+      }
     } else if (pathname === '/api/stats' && method === 'GET') {
       sendResponse(res, 200, {
         success: true,
@@ -266,6 +444,7 @@ const server = http.createServer(async (req, res) => {
           'GET /api/algorithms': 'List supported hash algorithms',
           'GET /api/files': 'List available files in public directory',
           'GET /api/stats': 'Show memory and performance stats',
+          'GET /api/manifest': 'Generate resource manifest with file hashes',
           'GET /api/hash?file=:filename&algorithm=:algo': 'Get hash for a single file',
           'POST /api/hash/batch': 'Get hashes for multiple files (body: { files: [], algorithm: string })',
         },
@@ -291,6 +470,8 @@ server.listen(PORT, () => {
   console.log('  GET  http://localhost:' + PORT + '/api/algorithms');
   console.log('  GET  http://localhost:' + PORT + '/api/files');
   console.log('  GET  http://localhost:' + PORT + '/api/stats');
+  console.log('  GET  http://localhost:' + PORT + '/api/manifest?format=json');
+  console.log('  GET  http://localhost:' + PORT + '/api/manifest?format=html&ext=js&ext=css');
   console.log('  GET  http://localhost:' + PORT + '/api/hash?file=example.txt&algorithm=sha256');
   console.log('  POST http://localhost:' + PORT + '/api/hash/batch');
 });
